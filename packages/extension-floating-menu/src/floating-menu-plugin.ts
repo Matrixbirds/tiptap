@@ -1,10 +1,30 @@
 import {
-  Editor, getText, getTextSerializersFromSchema, posToDOMRect,
+  Editor, Extension, getText, getTextSerializersFromSchema, posToDOMRect,
 } from '@tiptap/core'
-import { Node as ProseMirrorNode } from '@tiptap/pm/model'
+import { Node as ProseMirrorNode, ResolvedPos } from '@tiptap/pm/model'
 import { EditorState, Plugin, PluginKey } from '@tiptap/pm/state'
 import { EditorView } from '@tiptap/pm/view'
 import tippy, { Instance, Props } from 'tippy.js'
+
+declare module '@tiptap/core' {
+  interface Commands<ReturnType> {
+    floatingMenuPlugin: {
+      setFloatMenu: (visible: boolean) => ReturnType,
+    }
+  }
+}
+
+const floatingMenuKey = new PluginKey('floatingMenuKey')
+
+const isEmptyParagraph = (pos: ResolvedPos, editor: Editor) => {
+  const nodeParent = pos.parent
+
+  if (nodeParent.type.name === 'paragraph' && nodeParent.content.size === 0 && !getText(nodeParent, { textSerializers: getTextSerializersFromSchema(editor.schema) })) {
+    return true
+  }
+
+  return false
+}
 
 export interface FloatingMenuPluginProps {
   /**
@@ -54,6 +74,7 @@ export type FloatingMenuViewProps = FloatingMenuPluginProps & {
   view: EditorView
 }
 
+// TIPTAP PLUGIN
 export class FloatingMenuView {
   public editor: Editor
 
@@ -63,7 +84,11 @@ export class FloatingMenuView {
 
   public preventHide = false
 
+  public forceHide = false
+
   public tippy: Instance | undefined
+
+  public visible: boolean = false
 
   public tippyOptions?: Partial<Props>
 
@@ -97,12 +122,14 @@ export class FloatingMenuView {
     this.editor = editor
     this.element = element
     this.view = view
+    this.forceHide = false
 
     if (shouldShow) {
       this.shouldShow = shouldShow
     }
 
     this.element.addEventListener('mousedown', this.mousedownHandler, { capture: true })
+    this.element.addEventListener('keydown', this.keydownHandler)
     this.editor.on('focus', this.focusHandler)
     this.editor.on('blur', this.blurHandler)
     this.tippyOptions = tippyOptions
@@ -111,8 +138,17 @@ export class FloatingMenuView {
     this.element.style.visibility = 'visible'
   }
 
-  mousedownHandler = () => {
+  mousedownHandler = (event: MouseEvent) => {
+    console.log("mousedownHandler ", event.target)
     this.preventHide = true
+  }
+
+  keydownHandler = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      this.preventHide = true
+      this.hide()
+      this.editor.commands.focus()
+    }
   }
 
   focusHandler = () => {
@@ -160,6 +196,28 @@ export class FloatingMenuView {
       trigger: 'manual',
       placement: 'right',
       hideOnClick: 'toggle',
+      onShow: () => {
+        this.visible = true
+        // this.editor.commands.blur()
+        // const textarea = document.getElementById('textarea')
+
+        setTimeout(() => {
+          this.preventHide = true
+          this.editor.commands.blur()
+          requestAnimationFrame(() => {
+            this.preventHide = false
+            const textarea = document.getElementById('textarea')
+
+            textarea?.focus()
+          })
+        }, 0)
+        // textarea?.focus()
+        // this.editor.view.dispatch(this.editor.state.tr.setMeta('forceFloating', true))
+        // console.log("show tippy onShow")
+      },
+      onHidden: () => {
+        this.visible = false
+      },
       ...this.tippyOptions,
     })
 
@@ -170,12 +228,12 @@ export class FloatingMenuView {
   }
 
   update(view: EditorView, oldState?: EditorState) {
-    const { state } = view
-    const { doc, selection } = state
+    const { state, composing } = view
+    const { selection } = state
     const { from, to } = selection
-    const isSame = oldState && oldState.doc.eq(doc) && oldState.selection.eq(selection)
 
-    if (isSame) {
+    if (composing || this.visible) {
+      console.log("update ", view, oldState)
       return
     }
 
@@ -218,16 +276,96 @@ export class FloatingMenuView {
       )
     }
     this.tippy?.destroy()
+    this.preventHide = false
+    this.visible = false
     this.element.removeEventListener('mousedown', this.mousedownHandler, { capture: true })
+    this.element.removeEventListener('keydown', this.keydownHandler)
     this.editor.off('focus', this.focusHandler)
     this.editor.off('blur', this.blurHandler)
   }
 }
 
 export const FloatingMenuPlugin = (options: FloatingMenuPluginProps) => {
+
   return new Plugin({
-    key:
-      typeof options.pluginKey === 'string' ? new PluginKey(options.pluginKey) : options.pluginKey,
-    view: view => new FloatingMenuView({ view, ...options }),
+    key: floatingMenuKey,
+    view: view => new FloatingMenuView({
+      view,
+      ...options,
+      shouldShow: () => {
+        const { selection } = view.state
+        const { $anchor, empty } = selection
+
+        const emptyParagraph = isEmptyParagraph($anchor, options.editor)
+        const stateValue = floatingMenuKey.getState(view.state)
+
+        if (!empty || !emptyParagraph || !stateValue.showFloatingMenu) {
+          return false
+        }
+        return options.shouldShow?.({ editor: options.editor, view, state: view.state }) ?? true
+      },
+    }),
+    state: {
+      init: () => {
+        return {
+          showFloatingMenu: false,
+        }
+      },
+      apply: (tr, value, oldState: EditorState, newState: EditorState) => {
+        const meta = tr.getMeta(floatingMenuKey)
+
+        if (meta !== undefined) {
+          return { showFloatingMenu: meta }
+        }
+
+        const isSameDoc = oldState && oldState.doc.eq(newState.doc)
+        const isSameSelection = oldState.selection.eq(newState.selection)
+
+        // 这里是为了光标位置发生变化，导致菜单消失,需要判断文档模型的前后状态变更，以及光标是否有变更
+        if (isSameDoc && isSameSelection) {
+          return { showFloatingMenu: false }
+        }
+
+        return { showFloatingMenu: false }
+      },
+    },
   })
 }
+
+export const FloatingMenuExtension = Extension.create({
+  name: 'floatingMenuExtension',
+  addCommands() {
+    return {
+      setFloatMenu: (visible: boolean) => ({ tr, dispatch }) => {
+        if (dispatch) {
+          dispatch(tr.setMeta(floatingMenuKey, visible))
+        }
+        return true
+      },
+    }
+  },
+  addKeyboardShortcuts() {
+    return {
+      Space: () => {
+        return this.editor.commands.command(({
+          state, editor,
+        }) => {
+          if (editor && isEmptyParagraph(state.selection.$to, editor)) {
+            editor.commands.setFloatMenu(true)
+            return true
+          }
+          return false
+        })
+      },
+      Escape: () => {
+        return this.editor.commands.command(({ editor }) => {
+          if (editor) {
+            editor.commands.setFloatMenu(false)
+            return true
+          }
+          return false
+        })
+      },
+    }
+  },
+})

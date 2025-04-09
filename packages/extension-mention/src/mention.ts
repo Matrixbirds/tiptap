@@ -1,7 +1,39 @@
-import { mergeAttributes, Node } from '@tiptap/core'
-import { DOMOutputSpec, Node as ProseMirrorNode } from '@tiptap/pm/model'
+import { getText, getTextSerializersFromSchema, mergeAttributes, Node, posToDOMRect } from '@tiptap/core'
+import { DOMOutputSpec, Node as ProseMirrorNode, ResolvedPos } from '@tiptap/pm/model'
 import { PluginKey } from '@tiptap/pm/state'
-import Suggestion, { SuggestionOptions } from '@tiptap/suggestion'
+import Suggestion, { SuggestionMatch, SuggestionOptions, Trigger } from '@tiptap/suggestion'
+
+// TIPTAP PLUGIN
+export function findSuggestionMatch(config: Trigger): SuggestionMatch {
+  const {
+    $position,
+  } = config
+  const spaceChar = ' '
+
+  const text = $position.nodeBefore?.isText && $position.nodeBefore.text
+
+  if (!text) {
+    return null
+  }
+
+  const textFrom = $position.pos - text.length
+  const matchIndex = text.indexOf(spaceChar)
+
+  if ($position.depth === 1 && $position.marks().length === 0 && $position.parent.content.size === 1 && matchIndex === 0) {
+    const from = textFrom + matchIndex
+    const to = from + text.length
+
+    return {
+      range: {
+        from,
+        to,
+      },
+      query: '',
+      text,
+    }
+  }
+  return null
+}
 
 // See `addAttributes` below
 export interface MentionNodeAttrs {
@@ -253,6 +285,72 @@ export const Mention = Node.create<MentionOptions>({
 
         return isMention
       }),
+      Space: () => {
+        const { selection } = this.editor.state
+        const { empty, from } = selection
+
+        // 文档编辑框焦点聚焦时
+        const focused = this.editor.view.hasFocus()
+
+        if (!empty && !focused) {
+          return false
+        }
+
+        const resolvedPos = this.editor.state.doc.resolve(from)
+
+        const isEmptyParagraph = (pos: ResolvedPos) => {
+          const nodeParent = pos.parent
+
+          if (nodeParent.type.name === 'paragraph' && nodeParent.content.size === 0 && !getText(nodeParent, { textSerializers: getTextSerializersFromSchema(this.editor.schema) })) {
+            return true
+          }
+
+          return false
+        }
+
+        if (isEmptyParagraph(resolvedPos)) {
+          const result = posToDOMRect(this.editor.view, this.editor.state.selection.$from.pos, this.editor.state.selection.$to.pos)
+
+          const {
+            x, y,
+          } = result
+
+          // write a div to the dom
+          // to get the position of the bubble menu
+          const bubbleMenu = document.createElement('div')
+
+          const height = 50
+
+          bubbleMenu.id = '#bubbleMenu'
+          bubbleMenu.style.position = 'absolute'
+          bubbleMenu.style.left = `${x}px`
+          bubbleMenu.style.top = `${y}px`
+          bubbleMenu.style.width = '100px'
+          bubbleMenu.style.height = `${height}px`
+          bubbleMenu.style.backgroundColor = 'red'
+          bubbleMenu.style.zIndex = '9999'
+          bubbleMenu.style.pointerEvents = 'none'
+          bubbleMenu.style.opacity = '0.5'
+          bubbleMenu.style.borderRadius = '4px'
+          bubbleMenu.style.transition = 'opacity 0.2s ease-in-out'
+          bubbleMenu.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.5)'
+          bubbleMenu.style.border = '1px solid rgba(0, 0, 0, 0.5)'
+          const input = document.createElement('input')
+
+          bubbleMenu.appendChild(input)
+          document.body.appendChild(bubbleMenu)
+          setTimeout(() => {
+            input.focus()
+          }, 0)
+          // setTimeout(() => {
+          //   bubbleMenu.remove()
+          // }, 3000)
+
+          return true
+        }
+
+        return false
+      },
     }
   },
 
@@ -261,6 +359,7 @@ export const Mention = Node.create<MentionOptions>({
       Suggestion({
         editor: this.editor,
         ...this.options.suggestion,
+        // findSuggestionMatch,
       }),
     ]
   },

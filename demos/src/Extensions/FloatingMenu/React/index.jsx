@@ -1,11 +1,14 @@
 import './styles.scss'
 
 import {
+  FloatingMenuExtension,
+} from '@tiptap/extension-floating-menu'
+import {
   EditorContent, FloatingMenu, mergeAttributes,
   Node, useEditor,
 } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef } from 'react'
 
 const Foo = Node.create({
   name: 'foo',
@@ -40,11 +43,25 @@ const Foo = Node.create({
   },
 })
 
+const InputPanel = ({
+  placeholder,
+}) => {
+  return (
+    <>
+      <textarea
+        id="textarea"
+        placeholder={placeholder}
+      />
+    </>
+  )
+}
+
 export default () => {
   const editor = useEditor({
     extensions: [
       StarterKit,
       Foo,
+      FloatingMenuExtension,
     ],
     content: `
       <p>
@@ -71,9 +88,11 @@ export default () => {
         </label>
         <button data-testid="insert-foo" onClick={() => editor.chain().insertFoo().focus().run()}>Insert Foo</button>
       </div>
-      {editor && <FloatingMenu editor={editor} tippyOptions={{ duration: 100 }}>
+      {/** // TIPTAP PLUGIN  */}
+      {editor && <FloatingMenu editor={editor} tippyOptions={{ duration: 0, hideOnClick: true }}>
         <div data-testid="floating-menu" className="floating-menu">
-          <button
+          <InputPanel placeholder="Type something..." />
+          {/* <button
             onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
             className={editor.isActive('heading', { level: 1 }) ? 'is-active' : ''}
           >
@@ -90,7 +109,7 @@ export default () => {
             className={editor.isActive('bulletList') ? 'is-active' : ''}
           >
             Bullet list
-          </button>
+          </button> */}
         </div>
       </FloatingMenu>}
       <EditorContent editor={editor} />
